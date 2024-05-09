@@ -4,7 +4,15 @@ locals {
 
 resource "aws_s3_bucket" "redirect" {
   bucket = var.source_bucket_name
-  acl    = "public-read"
+  force_destroy = true
+}
+
+resource "aws_s3_bucket_policy" "redirect" {
+  depends_on = [
+    aws_s3_bucket_ownership_controls.redirect,
+    aws_s3_bucket_public_access_block.redirect,
+  ]
+  bucket = aws_s3_bucket.redirect.bucket
   policy = <<EOF
 {
   "Version":"2012-10-17",
@@ -18,25 +26,61 @@ resource "aws_s3_bucket" "redirect" {
   ]
 }
 EOF
+}
 
-  force_destroy = true
-
-  website {
-    redirect_all_requests_to = "https://${var.target_domain_name}"
+resource "aws_s3_bucket_ownership_controls" "redirect" {
+  bucket = aws_s3_bucket.redirect.id
+  rule {
+    object_ownership = "BucketOwnerPreferred"
   }
+}
 
-  lifecycle_rule {
-        enabled = true
+resource "aws_s3_bucket_public_access_block" "redirect" {
+  bucket = aws_s3_bucket.redirect.id
 
-        noncurrent_version_expiration {
-            days = 90
-        }
+  block_public_acls       = false
+  block_public_policy     = false
+  ignore_public_acls      = false
+  restrict_public_buckets = false
+
+  depends_on = [
+    aws_s3_bucket_ownership_controls.redirect,
+  ]
+}
+
+resource "aws_s3_bucket_acl" "redirect" {
+  bucket = aws_s3_bucket.redirect.bucket
+  acl = "public-read"
+
+  depends_on = [
+    aws_s3_bucket_ownership_controls.redirect,
+    aws_s3_bucket_public_access_block.redirect,
+  ]
+}
+
+resource "aws_s3_bucket_lifecycle_configuration" "redirect" {
+  bucket = aws_s3_bucket.redirect.bucket
+  rule {
+    id = var.source_bucket_name
+    status = "Enabled"
+    noncurrent_version_expiration {
+      noncurrent_days = 90
+    }
+  }
+}
+
+resource "aws_s3_bucket_website_configuration" "redirect" {
+  bucket = aws_s3_bucket.redirect.bucket
+  
+  redirect_all_requests_to {
+    protocol = "https"
+    host_name = "${var.target_domain_name}"
   }
 }
 
 resource "aws_cloudfront_distribution" "s3_distribution_redirect" {
   origin {
-    domain_name = aws_s3_bucket.redirect.website_endpoint
+    domain_name = aws_s3_bucket_website_configuration.redirect.website_endpoint
     origin_id   = local.origin_id
     custom_origin_config {
       http_port              = "80"
